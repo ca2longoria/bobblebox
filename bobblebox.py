@@ -5,6 +5,16 @@
 # MIT License
 #
 
+# Things To Do:
+# - Single socket file
+#   . one global socket jives not with a class definition
+# - Proper log handling
+#   . everything outputs with print statements, right now
+#   - decide on standardized log format
+# - Daemonized thread should start *outside* the init
+# - Provide a new_socket_object method of some sort
+#
+
 import os
 import sys
 import json
@@ -68,11 +78,23 @@ class Box(_Observifier,_Socketeer):
 		_Observifier.__init__(self,obs)
 	def callback(self,s,conn,addr):
 		try:
-			method = s[:s.index('{')]
-			path = method[method.index(':')+1:] if ':' in method else ''
-			method = method[:method.index(':')] if ':' in method else method
-			query = json.loads(s[s.index('{'):])
+			if s[0] == '{':
+				# JSON object mode
+				j = json.loads(s)
+				method = j['method']
+				path = j['path']               if j.has_key('path')  else ''
+				value = json.loads(j['value']) if j.has_key('value') else None
+				meta = j['meta']               if j.has_key('meta')  else None
+			else:
+				# method:path:value mode
+				t = s.split(':',2)
+				t[2] = t[2].strip()
+				method = t[0]
+				path = t[1]
+				value = json.loads(t[2]) if len(t[2]) > 0 else None
+				meta = None
 			
+			# NOTE: This is backwards.  It should be (ob,path,...)
 			def stretch(path,ob,delim='.'):
 				tokens = path.split(delim)
 				for i in range(len(tokens)):
@@ -81,23 +103,32 @@ class Box(_Observifier,_Socketeer):
 					ob = t
 				return ob
 			def reach(path,ob,delim='.'):
-				tokens = path.split(delim)
+				tokens = filter(lambda s:len(s)>0,path.split(delim))
+				print 'tokens',tokens
 				for i in range(len(tokens)):
 					ob = ob[tokens[i]]
 				return ob
+			def reach2(path,ob,delim='.'):
+				prev,k = None,None
+				tokens = filter(lambda s:len(s)>0,path.split(delim))
+				for i in range(len(tokens)):
+					prev = ob
+					k = tokens[i]
+					ob = ob[tokens[i]]
+				return prev,k
 				
 			print method,path
 			# And here's where the magic happens.
 			
 			if method == 'create':
-				pass
+				method = 'update'
 			
-			elif method == 'read':
-				pass
+			if method == 'read':
+				ob = reach(path,self.observer)
 			
-			elif method == 'update':
-				#q = stretch(path,query)
-				q = query
+			if method == 'update':
+				#q = stretch(path,value)
+				q = value
 				ob = reach(path,self.observer)
 				print q
 				print ob
@@ -106,17 +137,29 @@ class Box(_Observifier,_Socketeer):
 					ob[k] = v
 				print self.observer
 			
-			elif method == 'delete':
-				pass
+			if method == 'delete':
+				p,k = reach2(path,self.observer)
+				try:
+					del p[k]
+					ob = True
+				except Exception:
+					ob = False
 			
 			# Okay, enough magic.  It's over; go home.
 			conn.send(json.dumps(ob,indent=2))
-		except Exception:
-			pass
+		
+		except Exception as e:
+			print >>sys.stderr, 'EXCEPTION',e
+			# TODO: Work out what on Earth the Exception return value should be.
+			#   Maybe a telling message within the '<>' to ensure JSON *in*-
+			#   -compatibility?
+			conn.send('<>')
 
 
 if __name__ == '__main__':
-	box = Box(O.Dict.Recurse({'A':{'B':{'C':5}}}))
+	# TODO: The start of the daemon thread should be called outside the init
+	#   function.
+	box = Box(O.Dict.Recurse({'A':{'B':{'C':5}},'D':'strayang'}))
 	
 	import time
 	while threading.active_count() > 0:
