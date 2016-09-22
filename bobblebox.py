@@ -17,6 +17,7 @@
 
 import os
 import sys
+import copy
 import json
 import socket
 import threading
@@ -27,14 +28,42 @@ default_settings = {
 	'socket':'/tmp/tutor.sock'
 }
 
+def iter_recv_msg(sock,buflen):
+	s = sock.recv(buflen)
+	print 'gwarsh',s,len(s)
+	yield s
+	while len(s) == buflen:
+		print 'oh come on'
+		s = sock.recv(buflen)
+		print 'gwarsh',s,len(s)
+		print map(lambda c:ord(c),s)
+		yield s
+
+def iter_recv_msg_term(sock,buflen,term):
+	# Slow, due to the 'term in s' check.  Gets around the situation where the
+	# final s is precisely of length buflen, but no EOF is... raised.
+	s = '.'
+	while len(s) > 0:
+		s = sock.recv(buflen)
+		final = term in s
+		yield s[:s.index(term)] if final else s
+		if len(s) < buflen or final:
+			break
+
 # NOTE: Can this only be initialized once?  I'm only seeing one socket file.
 class _Socketeer(object):
 	def __init__(self,settings=default_settings):
 		self.sock = self._init_socket(settings)
+		self.settings = copy.deepcopy(settings)
 		self._start_loop()
 	
 	def callback(self,s,conn,addr):
 		conn.send('amazing '+s)
+	
+	def client_socket(self):
+		k = socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+		k.connect(self.settings['socket'])
+		return k
 	
 	def _init_socket(self,settings=default_settings):
 		if os.path.exists(settings['socket']):
@@ -49,20 +78,16 @@ class _Socketeer(object):
 		class whatevs(threading.Thread):
 			def __init__(self):
 				threading.Thread.__init__(self)
-				self.buflen = 5
+				self.buflen = 3 # TODO: Set to a higher value once done with testing.
 			def run(self):
 				sock.listen(1)
 				while True:
 					conn,addr = sock.accept()
-					m = ''.join(list(self._iter_recv_msg(conn)))
+					# NOTE: Anything coming in is in string format, not binary.
+					m = ''.join(list(iter_recv_msg_term(conn,self.buflen,'\0')))
 					print (guy,m,conn,addr)
 					guy.callback(m,conn,addr)
 					conn.close()
-			def _iter_recv_msg(self,conn):
-				s = '.'
-				while 0 < len(s) <= self.buflen:
-					s = conn.recv(self.buflen)
-					yield s
 				
 		self.thread = whatevs()
 		self.thread.daemon = True
@@ -106,6 +131,7 @@ class Box(_Observifier,_Socketeer):
 				tokens = filter(lambda s:len(s)>0,path.split(delim))
 				print 'tokens',tokens
 				for i in range(len(tokens)):
+					print 'ob',ob
 					ob = ob[tokens[i]]
 				return ob
 			def reach2(path,ob,delim='.'):
@@ -134,6 +160,7 @@ class Box(_Observifier,_Socketeer):
 				print ob
 				for k,v in q.iteritems():
 					# Something will be thrown in the callback if this fails, data-side.
+					print 'ob[%s] = %s' % (str(k),str(v))
 					ob[k] = v
 				print self.observer
 			
